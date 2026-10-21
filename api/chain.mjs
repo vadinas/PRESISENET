@@ -2,6 +2,11 @@ import { runSimulation } from "../sim/simulator.mjs";
 import { normalizeTarget } from "../sim/target.mjs";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let waitUntilFn = null;
+try {
+  const mod = await import("@vercel/functions");
+  if (typeof mod.waitUntil === "function") waitUntilFn = mod.waitUntil;
+} catch { /* runtime sem waitUntil: fica o race manual */ }
 
 function tokenFromRequest(req) {
   const url = new URL(req.url, "http://localhost");
@@ -31,16 +36,16 @@ function selfUrl(req) {
   return `${proto}://${host}`;
 }
 
-async function fireChild(nextUrl, token) {
+// Despacha o filho com CERTIFICADO: tenta até 8 vezes, só considera entregue
+// quando a invocação filha responde 200 dentro do próprio fetch.
+async function dispatchChild(nextUrl, token) {
   const headers = { "x-presistent-token": token, "user-agent": "presistent-chain/1.0" };
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  for (let attempt = 1; attempt <= 8; attempt++) {
     try {
-      const p = fetch(nextUrl, { method: "GET", headers });
-      await Promise.race([p, sleep(3000)]);
-      return true;
-    } catch {
-      await sleep(500 * attempt);
-    }
+      const r = await fetch(nextUrl, { method: "GET", headers, signal: AbortSignal.timeout(30000) });
+      if (r.ok) return true;
+    } catch { /* rede lenta ou cutoff: repete */ }
+    await sleep(1500 * attempt);
   }
   return false;
 }
@@ -61,26 +66,31 @@ export default async function handler(req, res) {
     const token = tokenFromRequest(req) || process.env.CRON_SECRET || process.env.SIM_TOKEN || "";
     const depth = Number(req.query.depth || 0);
     const maxDepth = Number(process.env.SIM_CHAIN_DEPTH_CAP || 20000);
-    const delay = Math.min(45000, Math.max(5000, Number(process.env.SIM_CHAIN_DELAY_MS || 40000)));
+    const delay = Math.min(45000, Math.max(5000, Number(process.env.SIM_CHAIN_DELAY_MS || 35000)));
     const roundsEvery = Math.max(1, Number(process.env.SIM_CHAIN_ROUNDS_EVERY || 2));
     const doRound = depth % roundsEvery === 0;
     const nextDepth = depth + 1;
 
     if (depth >= maxDepth) {
-      console.log(`[SIM-CHAIN] depth=${depth} >= maxDepth (${maxDepth}) — corrente parada; aguardar novo semente diário.`);
+      console.log(`[SIM-CHAIN] depth=${depth} >= maxDepth (${maxDepth}) — parado; novo semente vem dos crons ou da ressurreição.`);
       res.status(200).json({ service: "presistent-chain", ok: true, depth, stopped: "maxDepth" });
       return;
     }
 
-    // 1) Dorme o intervalo (o "timer" da cadência vive aqui — TODAS as gerações dormem,
-    //    para que a distância entre rondas seja ~2×o delay e não ~1×delay)
+    // 1) timer da cadência: TODAS as gerações dormem
     await sleep(delay);
 
-    // 2) Despacha a próxima geração ANTES da ronda — ronda lenta nunca mata a corrente
+    // 2) DESPACHA o filho SEMPRE ANTES da ronda (se a ronda for lenta/render acordando,
+    //    60s do maxDuration nunca apanha o despacho desfeito)
     const nextUrl = `${selfUrl(req)}/api/chain?depth=${nextDepth}&token=${encodeURIComponent(token)}`;
-    const dispatched = await fireChild(nextUrl, token);
+    const childPromise = dispatchChild(nextUrl, token);
 
-    // 3) Só depois faz a ronda (fala com a Render) — qualquer lentidão aqui é irrelevante para a cadeia
+    // waitUntil = a runtime fica VIVA mesmo após a resposta, até o filho estar CONFIRMADO.
+    // Isto elimina a perda de transmissão (causa nº1 de cadeias mortas).
+    if (waitUntilFn) waitUntilFn(childPromise.catch(() => {}));
+    else await Promise.race([childPromise, sleep(9000)]);
+
+    // 3) ronda na Render (só nas gerações de ronda)
     let report = null;
     if (doRound) {
       try {
@@ -99,7 +109,7 @@ export default async function handler(req, res) {
     }
 
     console.log(
-      `[SIM-CHAIN] depth=${depth} dispatched=${dispatched ? "sim" : "NAO"} round=${doRound} verdict=${report ? report.verdict : "skip"} okRate=${report ? report.okRate : "-"}`,
+      `[SIM-CHAIN] depth=${depth} round=${doRound} verdict=${report ? report.verdict : "skip"} okRate=${report ? report.okRate : "-"}`,
     );
 
     res.status(200).json({
@@ -107,7 +117,6 @@ export default async function handler(req, res) {
       ok: true,
       depth,
       next: nextDepth,
-      dispatched,
       round: doRound,
       verdict: report ? report.verdict : "skipped",
       okRate: report ? report.okRate : null,
