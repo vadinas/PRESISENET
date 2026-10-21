@@ -58,7 +58,7 @@ O PRESITEN **navega como um browser de verdade** e valida tudo:
 
 | Modo | Onde corre | Agendamento | Estado da sessão | Papel |
 | ---- | ---------- | ----------- | ---------------- | ----- |
-| **(a) GitHub Actions** — recomendado | runner do GitHub (workflow `.github/workflows/keep-alive.yml`), node direto no runner | cron **`*/10`** min + `workflow_dispatch` | `sim/state/` via `actions/cache` | motor principal do keep-alive; dispara a cópia Vercel (opcional) |
+| **(a) GitHub Actions** — recomendado | runner do GitHub (workflow `.github/workflows/keep-alive.yml`), node direto no runner |         cron **`*/2`** min + `workflow_dispatch` | `sim/state/` via `actions/cache` | motor principal do keep-alive; dispara a cópia Vercel (opcional) |
 | **(b) Vercel Functions** | `api/simulate.mjs` + `api/status.mjs`, painel `public/index.html` em `/` | cron **diário** (limite do Hobby) + HTTP com token | serverless (sem disco persistente) | fallback diário; disparos a quente |
 | **(c) Docker / loop local** | container (`Dockerfile`, `docker-compose.yml`) ou máquina própria (`sim/loop.mjs`) | interno: `SIM_INTERVAL_SECONDS` (default 180 s) | `sim/state/session.json` em volume | ronda contínua em infra própria |
 
