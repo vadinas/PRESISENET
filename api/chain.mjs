@@ -72,8 +72,9 @@ export default async function handler(req, res) {
       return;
     }
 
-    // 1) Dorme o intervalo (o "timer" da cadência vive aqui)
-    if (doRound) await sleep(delay);
+    // 1) Dorme o intervalo (o "timer" da cadência vive aqui — TODAS as gerações dormem,
+    //    para que a distância entre rondas seja ~2×o delay e não ~1×delay)
+    await sleep(delay);
 
     // 2) Despacha a próxima geração ANTES da ronda — ronda lenta nunca mata a corrente
     const nextUrl = `${selfUrl(req)}/api/chain?depth=${nextDepth}&token=${encodeURIComponent(token)}`;
