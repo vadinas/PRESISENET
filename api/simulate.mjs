@@ -50,8 +50,20 @@ export default async function handler(req, res) {
       stateDir: null,
       userAgent: process.env.SIM_UA,
     });
+    // LOG DETALHADO PARA MONITORIZAÇÃO
+    const shortSteps = report.steps.slice(0, 10).map(s => `${s.path} ${s.status} ${s.ms}ms`);
+    console.log(`[SIM-VLGR] ${new Date().toISOString()} | method=${req.method} | path=${req.url} | verdict=${report.verdict} | okRate=${report.okRate} | chat=${report.chat.status} | took=${report.tookMs}ms | assets=${report.assets.length}`);
+    console.log(`[SIM-VLGR] steps: [${shortSteps.join(", ")}]`);
+    if (report.chat.attempted) {
+      console.log(`[SIM-VLGR] chat: ${report.chat.status} • provider ${report.chat.provider || "-"} • ${report.chat.replyChars} chars • markdown ${report.chat.markdownDetected}`);
+      if (report.chat.replyPreview) console.log(`[SIM-VLGR] preview: "${report.chat.replyPreview}"`);
+    }
+    if (report.errors.length) {
+      console.log(`[SIM-VLGR] errors: ${report.errors.join("; ")}`);
+    }
     res.status(200).json(report);
   } catch (err) {
+    console.error(`[SIM-VLGR] ERRO handler: ${err && err.message ? err.message : err}`);
     res.status(500).json({ service: "presistent", verdict: "failed", error: err && err.message ? err.message : String(err) });
   }
 }

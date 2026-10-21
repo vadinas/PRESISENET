@@ -17,6 +17,7 @@ env:
   VERCEL_SIM_URL: ${{ secrets.VERCEL_SIM_URL }}
   VERCEL_SIM_TOKEN: ${{ secrets.VERCEL_SIM_TOKEN }}
   SIM_CHAT_HOURS: ${{ secrets.SIM_CHAT_HOURS }}
+  SIM_BROWSER: "0"
 
 jobs:
   simulate:
@@ -29,7 +30,7 @@ jobs:
         with:
           node-version: 22
 
-      - name: Estado da sessão (cookie jar) via cache
+      - name: Estado da sessao (cookie jar) via cache
         uses: actions/cache@v4
         with:
           path: sim/state
@@ -37,16 +38,24 @@ jobs:
           restore-keys: |
             presistent-session-
 
-      - name: Ronda de navegação real (HTTP core)
+      - name: Ronda de navegacao real (HTTP core)
         run: |
           node sim/run.mjs --json > sim-report.json || true
-          node -e "const r=require('./sim-report.json');console.log('verdict:',r.verdict,'| okRate:',r.okRate,'| coldStart:',r.coldStart,'| chat:',r.chat.status)"
+          node -e "const r=require('./sim-report.json');console.log('verdict:',r.verdict,'| okRate:',r.okRate,'| coldStart:',r.coldStart,'| chat:',r.chat.status,'| took:',r.tookMs+'ms')"
           node -e "const r=require('./sim-report.json');if(r.verdict==='failed'){process.exit(1)}"
 
-      - name: Disparar a cópia na Vercel (opcional)
+      - name: Ronda Chromium real (navegacao humana completa)
+        if: ${{ github.run_number % 4 == 0 }}
+        continue-on-error: true
+        run: |
+          npm install --omit=dev
+          npx --yes playwright install --with-deps chromium
+          node sim/browser.mjs --no-chat || true
+
+      - name: Disparar a copia na Vercel (opcional)
         if: ${{ env.VERCEL_SIM_URL != '' }}
         run: |
           STATUS_CODE=$(curl -sS --max-time 120 -o vercel-report.json -w '%{http_code}' \
             -X POST -H "x-presistent-token: ${VERCEL_SIM_TOKEN}" "$VERCEL_SIM_URL/api/simulate")
-          echo "Vercel /api/simulate → HTTP $STATUS_CODE"
-          node -e "try{const r=require('./vercel-report.json');console.log('verdict:',r.verdict)}catch{}"
+          echo "Vercel /api/simulate -> HTTP $STATUS_CODE"
+          node -e "try{const r=require('./vercel-report.json');console.log('verdict:',r.verdict,'| okRate:',r.okRate)}catch{}"

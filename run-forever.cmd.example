@@ -1,0 +1,10 @@
+@echo off
+:: keep-alive 24/7 no Windows: roda o loop com navegacao real (e Chromium quando SIM_BROWSER=1)
+:: Uso: d� .\run-forever.cmd   (Ctrl+C para parar)
+setlocal
+cd /d "I:\Programacao\presistent"
+:loop
+  set SIM_INTERVAL_SECONDS=120
+  node sim\loop.mjs
+  timeout /t %SIM_INTERVAL_SECONDS% /nobreak >nul 2>&1
+  goto loop

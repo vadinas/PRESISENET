@@ -62,9 +62,17 @@ O PRESITEN **navega como um browser de verdade** e valida tudo:
 | **(b) Vercel Functions** | `api/simulate.mjs` + `api/status.mjs`, painel `public/index.html` em `/` | cron **diário** (limite do Hobby) + HTTP com token | serverless (sem disco persistente) | fallback diário; disparos a quente |
 | **(c) Docker / loop local** | container (`Dockerfile`, `docker-compose.yml`) ou máquina própria (`sim/loop.mjs`) | interno: `SIM_INTERVAL_SECONDS` (default 180 s) | `sim/state/session.json` em volume | ronda contínua em infra própria |
 
-Notas:
+- **A cada 4 rondas no Actions**, o workflow também corre uma ronda de **Chromium real** (`browser.mjs`) — para validar visualmente que a app renderiza e navega como um humano.
 
-- O keep-alive corre `node sim/run.mjs` **diretamente no runner** — nada para instalar (zero deps), sem imagem Docker no caminho do cron.
+Nota importante sobre o agendamento no plano free:
+
+- **GitHub Actions plano free throttleia `schedule` a ~5 min** (as runs podem ser adiadas até ~30 min também sem aviso). Assim, o cron `*/2` **não garante 2 min**. Se o `presistenet` ainda adormecer por causa disto:
+  - **Opção A (recomendada, garantido 2 min)**: corre o loop continuamente na tua própria máquina/PC ou num VPS:
+    ```sh
+    SIM_BROWSER=1 SIM_INTERVAL_SECONDS=120 node sim/loop.mjs
+    # Windows: .\run-forever.cmd.example  |  VPS Linux: node sim/loop.mjs &
+    ```
+  - **Opção B**: usa um serviço gratuito de ping externo apontando para a Vercel: `GET https://presisenet.vercel.app/api/simulate?token=c955c3820dbdda7e8af70f74`.
 - Com os secrets `VERCEL_SIM_URL` + `VERCEL_SIM_TOKEN` definidos, cada ronda do Actions também **dispara a mesma simulação na instância Vercel** (`POST` com header de token). Sem os secrets, o passo é simplesmente omitido.
 - O cron da Vercel corre apenas **1x/dia** no Hobby — serve exclusivamente de *fallback*; o agendamento real é o cron do Actions (*/10), que tem folga face aos ~15 min de silêncio que a Render tolera.
 
