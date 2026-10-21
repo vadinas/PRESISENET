@@ -108,6 +108,24 @@ export default async function handler(req, res) {
       }
     }
 
+    // 3) publica o estado na app AKIRA (bot_ui) para o chip "Anti-sleep"
+    if (report) {
+      try {
+        const statsTarget = normalizeTarget(process.env.TARGET_URL || "https://akira-ia.onrender.com");
+        void fetch(`${statsTarget}/api/keepalive-stats`, {
+          method: "POST",
+          headers: { "x-presistent-token": token, "content-type": "application/json" },
+          body: JSON.stringify({
+            depth,
+            verdict: report.verdict,
+            okRate: report.okRate ?? null,
+            tookMs: report.tookMs || 0,
+          }),
+          signal: AbortSignal.timeout(6000),
+        }).catch(() => {});
+      } catch { /* o relatório nunca bloqueia a cadeia */ }
+    }
+
     console.log(
       `[SIM-CHAIN] depth=${depth} round=${doRound} verdict=${report ? report.verdict : "skip"} okRate=${report ? report.okRate : "-"}`,
     );
