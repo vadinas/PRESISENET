@@ -11,8 +11,12 @@
   },
   "crons": [
     {
-      "path": "/api/simulate",
+      "path": "/api/chain",
       "schedule": "0 0 * * *"
+    },
+    {
+      "path": "/api/chain",
+      "schedule": "0 12 * * *"
     }
   ]
 }
