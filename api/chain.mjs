@@ -36,33 +36,36 @@ function selfUrl(req) {
   return `${proto}://${host}`;
 }
 
-// Despacha o filho SEM clonar a cadeia: a espera é de 8s (o pedido já viajou e a
-// invocação filha já existe — o filho responde ~36s depois, não é preciso esperar);
-// retries apenas para erros RÁPIDOS de rede, nunca para filho lento (evita clones).
+// Despacha o filho com GARANTIA: espera pelo 200 real da invocação filha
+// (nunca desiste cedo — desistir cedo congelava o filho em voo e matava a cadeia
+// na profundidade 5+). Erros de rede -> retry com backoff. O waitUntil mantém a
+// execução viva além da resposta, por isso o await total é seguro.
 async function dispatchChild(nextUrl, token) {
   const headers = { "x-presistent-token": token, "user-agent": "presistent-chain/1.0" };
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  for (let attempt = 1; attempt <= 4; attempt++) {
     let p;
     try {
       p = fetch(nextUrl, { method: "GET", headers });
       p.catch(() => {}); // rejeições tardias nunca devem partir o runtime
     } catch {
-      await sleep(1500 * attempt);
+      await sleep(2000 * attempt);
       continue;
     }
     try {
-      const r = await Promise.race([p, sleep(8000)]);
-      if (r && typeof r === "object" && r.ok) return true;
-      if (!r) return true; // 8s esgotados = pedido em voo, filho vivo: sai SEM replicar
-    } catch {
-      // erro rápido de rede: repete
-    }
-    await sleep(1500 * attempt);
+      const r = await p; // ESPERA TOTAL pelo filho
+      if (r && typeof r === "object") {
+        if (r.ok) return true;
+        if (r.status === 401 || r.status === 404) return false; // token/rota errada: sem esperança de retry
+      }
+    } catch { /* rede: repete */ }
+    await sleep(2000 * attempt);
   }
   return false;
 }
 
-export const maxDuration = 60;
+// Fluid compute no Hobby permite até 150s — necessário para aguentar a espera
+// total da confirmação do filho (~80s de vida de uma geração).
+export const maxDuration = 150;
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", (req.headers.origin || "*").toString());
