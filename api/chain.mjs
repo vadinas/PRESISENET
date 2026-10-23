@@ -36,6 +36,20 @@ function selfUrl(req) {
   return `${proto}://${host}`;
 }
 
+// beacon: publica um evento da geração no painel (não bloqueia, nunca falha o fluxo)
+function beacon(statsTarget, token, payload) {
+  try {
+    void fetch(`${statsTarget}/api/keepalive-stats`, {
+      method: "POST",
+      headers: { "x-presistent-token": token, "content-type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(6000),
+    }).catch(() => {});
+  } catch { /* beacons nunca bloqueiam a cadeia */ }
+}
+
+const statsBase = () => normalizeTarget(process.env.TARGET_URL || "https://akira-ia.onrender.com");
+
 // Despacha o filho com GARANTIA: espera pelo 200 real da invocação filha
 // (nunca desiste cedo — desistir cedo congelava o filho em voo e matava a cadeia
 // na profundidade 5+). Erros de rede -> retry com backoff. O waitUntil mantém a
@@ -98,6 +112,7 @@ export default async function handler(req, res) {
     const mode = waitUntilFn ? "waitUntil" : "fallback";
 
     const work = (async () => {
+      beacon(statsBase(), token, { depth, verdict: `start:${doRound ? "round" : "pass"}`, okRate: null, tookMs: 0 });
       await sleep(delay);
 
       // ronda na Render (só nas gerações de ronda)
@@ -141,6 +156,7 @@ export default async function handler(req, res) {
       // despacha a próxima geração e ESPERA o ACK instantâneo dela (<2s)
       const nextUrl = `${selfUrl(req)}/api/chain?depth=${nextDepth}&token=${encodeURIComponent(token)}&nc=${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const childOk = await dispatchChild(nextUrl, token);
+      beacon(statsBase(), token, { depth, verdict: `delivered:${childOk}`, okRate: null, tookMs: 0 });
       console.log(`[SIM-CHAIN] depth=${depth} child=${nextDepth} delivered=${childOk}`);
       return childOk;
     })();
