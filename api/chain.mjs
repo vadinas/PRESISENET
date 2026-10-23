@@ -36,15 +36,27 @@ function selfUrl(req) {
   return `${proto}://${host}`;
 }
 
-// Despacha o filho com CERTIFICADO: tenta até 8 vezes, só considera entregue
-// quando a invocação filha responde 200 dentro do próprio fetch.
+// Despacha o filho SEM clonar a cadeia: a espera é de 8s (o pedido já viajou e a
+// invocação filha já existe — o filho responde ~36s depois, não é preciso esperar);
+// retries apenas para erros RÁPIDOS de rede, nunca para filho lento (evita clones).
 async function dispatchChild(nextUrl, token) {
   const headers = { "x-presistent-token": token, "user-agent": "presistent-chain/1.0" };
-  for (let attempt = 1; attempt <= 8; attempt++) {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    let p;
     try {
-      const r = await fetch(nextUrl, { method: "GET", headers, signal: AbortSignal.timeout(30000) });
-      if (r.ok) return true;
-    } catch { /* rede lenta ou cutoff: repete */ }
+      p = fetch(nextUrl, { method: "GET", headers });
+      p.catch(() => {}); // rejeições tardias nunca devem partir o runtime
+    } catch {
+      await sleep(1500 * attempt);
+      continue;
+    }
+    try {
+      const r = await Promise.race([p, sleep(8000)]);
+      if (r && typeof r === "object" && r.ok) return true;
+      if (!r) return true; // 8s esgotados = pedido em voo, filho vivo: sai SEM replicar
+    } catch {
+      // erro rápido de rede: repete
+    }
     await sleep(1500 * attempt);
   }
   return false;
