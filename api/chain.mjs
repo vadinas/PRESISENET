@@ -92,58 +92,65 @@ export default async function handler(req, res) {
       return;
     }
 
-    // 1) timer da cadência: TODAS as gerações dormem
-    await sleep(delay);
+    // ACK INSTANTÂNEO: respondemos já (<1s). Todo o trabalho vive no waitUntil —
+    // no Fluid compute a instância continua viva até work() terminar (≤80s),
+    // por isso a geração NUNCA fica presa numa janela pós-resposta.
+    const mode = waitUntilFn ? "waitUntil" : "fallback";
 
-    // 2) DESPACHA o filho SEMPRE ANTES da ronda (se a ronda for lenta/render acordando,
-    //    60s do maxDuration nunca apanha o despacho desfeito)
-    const nextUrl = `${selfUrl(req)}/api/chain?depth=${nextDepth}&token=${encodeURIComponent(token)}`;
-    const childPromise = dispatchChild(nextUrl, token);
+    const work = (async () => {
+      await sleep(delay);
 
-    // waitUntil = a runtime fica VIVA mesmo após a resposta, até o filho estar CONFIRMADO.
-    // Isto elimina a perda de transmissão (causa nº1 de cadeias mortas).
-    if (waitUntilFn) waitUntilFn(childPromise.catch(() => {}));
-    else await Promise.race([childPromise, sleep(9000)]);
-
-    // 3) ronda na Render (só nas gerações de ronda)
-    let report = null;
-    if (doRound) {
-      try {
-        report = await runSimulation({
-          target: normalizeTarget(process.env.TARGET_URL || "https://akira-ia.onrender.com"),
-          chatEnabled: "false",
-          assetsMax: process.env.SIM_ASSETS_MAX ?? 2,
-          timeoutMs: process.env.SIM_TIMEOUT_MS ?? 12500,
-          jitterMs: process.env.SIM_JITTER_MS ?? "80,500",
-          stateDir: null,
-          userAgent: process.env.SIM_UA,
-        });
-      } catch (e) {
-        report = { verdict: "erro-ronda", ok: false, error: (e && e.message) || String(e) };
+      // ronda na Render (só nas gerações de ronda)
+      let report = null;
+      if (doRound) {
+        try {
+          report = await runSimulation({
+            target: normalizeTarget(process.env.TARGET_URL || "https://akira-ia.onrender.com"),
+            chatEnabled: "false",
+            assetsMax: process.env.SIM_ASSETS_MAX ?? 2,
+            timeoutMs: process.env.SIM_TIMEOUT_MS ?? 12500,
+            jitterMs: process.env.SIM_JITTER_MS ?? "80,500",
+            stateDir: null,
+            userAgent: process.env.SIM_UA,
+          });
+        } catch (e) {
+          report = { verdict: "erro-ronda", ok: false, error: (e && e.message) || String(e) };
+        }
       }
-    }
 
-    // 3) publica o estado na app AKIRA (bot_ui) para o chip "Anti-sleep"
-    if (report) {
-      try {
-        const statsTarget = normalizeTarget(process.env.TARGET_URL || "https://akira-ia.onrender.com");
-        void fetch(`${statsTarget}/api/keepalive-stats`, {
-          method: "POST",
-          headers: { "x-presistent-token": token, "content-type": "application/json" },
-          body: JSON.stringify({
-            depth,
-            verdict: report.verdict,
-            okRate: report.okRate ?? null,
-            tookMs: report.tookMs || 0,
-          }),
-          signal: AbortSignal.timeout(6000),
-        }).catch(() => {});
-      } catch { /* o relatório nunca bloqueia a cadeia */ }
-    }
+      // publica o estado na app AKIRA (painel keepalive)
+      if (report) {
+        try {
+          const statsTarget = normalizeTarget(process.env.TARGET_URL || "https://akira-ia.onrender.com");
+          void fetch(`${statsTarget}/api/keepalive-stats`, {
+            method: "POST",
+            headers: { "x-presistent-token": token, "content-type": "application/json" },
+            body: JSON.stringify({
+              depth,
+              verdict: report.verdict,
+              okRate: report.okRate ?? null,
+              tookMs: report.tookMs || 0,
+            }),
+            signal: AbortSignal.timeout(6000),
+          }).catch(() => {});
+        } catch { /* o relatório nunca bloqueia a cadeia */ }
+      }
 
-    console.log(
-      `[SIM-CHAIN] depth=${depth} round=${doRound} verdict=${report ? report.verdict : "skip"} okRate=${report ? report.okRate : "-"}`,
-    );
+      console.log(`[SIM-CHAIN] depth=${depth} round=${doRound} verdict=${report ? report.verdict : "skip"} okRate=${report ? report.okRate : "-"}`);
+
+      // despacha a próxima geração e ESPERA o ACK instantâneo dela (<2s)
+      const nextUrl = `${selfUrl(req)}/api/chain?depth=${nextDepth}&token=${encodeURIComponent(token)}&nc=${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const childOk = await dispatchChild(nextUrl, token);
+      console.log(`[SIM-CHAIN] depth=${depth} child=${nextDepth} delivered=${childOk}`);
+      return childOk;
+    })();
+
+    if (waitUntilFn) waitUntilFn(work.catch(() => {}));
+    else {
+      // fallback sem waitUntil: arranque imediato; o filho responde instantâneo,
+      // reduzindo a janela de morte a milissegundos
+      void work;
+    }
 
     res.status(200).json({
       service: "presistent-chain",
@@ -151,9 +158,8 @@ export default async function handler(req, res) {
       depth,
       next: nextDepth,
       round: doRound,
-      verdict: report ? report.verdict : "skipped",
-      okRate: report ? report.okRate : null,
-      tookMs: report ? report.tookMs || 0 : 0,
+      ack: "instant",
+      mode,
     });
   } catch (err) {
     console.error(`[SIM-CHAIN] erro: ${err && err.message ? err.message : err}`);
