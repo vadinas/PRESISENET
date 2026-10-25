@@ -1,8 +1,9 @@
-name: keep-alive
+name: keep-alive-noturno
 
 on:
   schedule:
-    - cron: "*/2 * * * *"
+    - cron: "0 23 * * *"   # 23:00 UTC (00:00 PT) — cobre a madrugada ate ~05:00
+    - cron: "0 5 * * *"    # 05:00 UTC (06:00 PT) — cobre ate ~11:00
   workflow_dispatch:
 
 permissions:
@@ -13,49 +14,25 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  TARGET_URL: ${{ secrets.TARGET_URL }}
-  VERCEL_SIM_URL: ${{ secrets.VERCEL_SIM_URL }}
-  VERCEL_SIM_TOKEN: ${{ secrets.VERCEL_SIM_TOKEN }}
-  SIM_CHAT_HOURS: ${{ secrets.SIM_CHAT_HOURS }}
-  SIM_BROWSER: "0"
+  RENDER_HEALTH: https://akira-ia.onrender.com/api/health
+  PRESISTEN_SEED: https://presisenet.vercel.app/api/chain
 
 jobs:
-  simulate:
+  madrugada:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 355
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Estado da sessao (cookie jar) via cache
-        uses: actions/cache@v4
-        with:
-          path: sim/state
-          key: presistent-session-${{ github.run_id }}
-          restore-keys: |
-            presistent-session-
-
-      - name: Ronda de navegacao real (HTTP core)
+      - name: Loop de pings diretos a Render (cada 3 min, ~6h)
         run: |
-          node sim/run.mjs --json > sim-report.json || true
-          node -e "const r=require('./sim-report.json');console.log('verdict:',r.verdict,'| okRate:',r.okRate,'| coldStart:',r.coldStart,'| chat:',r.chat.status,'| took:',r.tookMs+'ms')"
-          node -e "const r=require('./sim-report.json');if(r.verdict==='failed'){process.exit(1)}"
-
-      - name: Ronda Chromium real (navegacao humana completa)
-        if: ${{ github.run_number % 4 == 0 }}
-        continue-on-error: true
-        run: |
-          npm install --omit=dev
-          npx --yes playwright install --with-deps chromium
-          node sim/browser.mjs --no-chat || true
-
-      - name: Disparar a copia na Vercel (opcional)
-        if: ${{ env.VERCEL_SIM_URL != '' }}
-        run: |
-          STATUS_CODE=$(curl -sS --max-time 120 -o vercel-report.json -w '%{http_code}' \
-            -X POST -H "x-presistent-token: ${VERCEL_SIM_TOKEN}" "$VERCEL_SIM_URL/api/simulate")
-          echo "Vercel /api/simulate -> HTTP $STATUS_CODE"
-          node -e "try{const r=require('./vercel-report.json');console.log('verdict:',r.verdict,'| okRate:',r.okRate)}catch{}"
+          TOKEN="${{ secrets.SIM_TOKEN }}"
+          if [ -z "$TOKEN" ]; then TOKEN='c955c3820dbdda7e8af70f74'; fi
+          for i in $(seq 1 110); do
+            TS=$(date -u '+%Y-%m-%d %H:%M:%S')
+            CODE=$(curl -sS -o /dev/null -w '%{http_code}' -m 25 "$RENDER_HEALTH" || echo "ERR")
+            echo "[$TS] iter=$i render=$CODE"
+            if [ "$(( i % 10 ))" -eq 0 ]; then
+              VCODE=$(curl -sS -o /dev/null -w '%{http_code}' -m 30 "$PRESISTEN_SEED?depth=0&token=${TOKEN}&from=gh-nightly" || echo "ERR")
+              echo "[$TS] reseed da cadeia Vercel -> $VCODE"
+            fi
+            sleep 180
+          done
